@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <string.h>
 #include "String.h"
+#include "Integer.h"
 #include "MsgStamp.h"
 #include "Class.h"
 #include "list.h"
@@ -255,6 +256,23 @@ struct list * vote(struct list * foq, struct list * left_behind)
   return foq;
 }
 
+int vote_on_retval(struct list * retlist)
+{
+  struct listnode * retvalnode = list_pop(retlist); 
+  int retval  = ((struct Integer *)retvalnode->data)->val;
+  int retval_tmp;
+  LIST_FOREACH(retlist, retvalnode)
+  {
+    retval_tmp = ((struct Integer *)retvalnode->data)->val;
+    if(retval_tmp == retval)
+      retval = retval_tmp;
+    else
+      return -1;
+  }
+
+  return retval; 
+}
+
 int init(struct thr * thr_arr[])
 {  
   int i;
@@ -296,6 +314,32 @@ int init(struct thr * thr_arr[])
     }
 
   }
+
+  // wait for retval
+  struct listnode * head;
+  struct listnode * retvalnode;
+  struct list * retlist = list_new();
+  int retval;
+  int nreadfrom = 0;
+  while(nreadfrom < NUM_THREADS)
+  {
+    for(i = 0; i<NUM_THREADS; i++)
+    {
+      if(thr_arr[i]->output_queue->size != 0)
+      {
+        pthread_mutex_lock(&db_mutex);
+        struct listnode * head = list_pop(thr_arr[i]->output_queue);
+        pthread_mutex_unlock(&db_mutex);
+
+        retvalnode = listnode_new(Integer, ((struct Integer *)head->data)->val);
+        LIST_APPEND(retlist, retvalnode);
+        nreadfrom++;
+      }
+    }
+  }
+
+  retval = vote_on_retval(retlist);
+  return retval;
 }
 
 void dispatch_to_threads(const char * command, struct thr * thr_arr[NUM_THREADS])
@@ -335,6 +379,7 @@ void trim_header(char * buffer)
 int main(int argc, char *argv[])
 {
   int rc;
+  int retval;
   int i;
   struct thr * thr_arr[NUM_THREADS];
   struct list * foq;
@@ -344,7 +389,14 @@ int main(int argc, char *argv[])
 
   pthread_mutex_init(&db_mutex, NULL);
 
-  init(thr_arr);
+  if((retval = init(thr_arr)) < 0)
+  {
+    printf("Error on initialization\n");
+    exit(1);
+  }
+  printf("Ret on init: %d\n", retval);
+//  fflush(stdout);
+ 
   ans = list_new();
   real_ans = list_new();
 

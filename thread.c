@@ -6,6 +6,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "String.h"
+#include "Integer.h"
 #include "list.h"
 #include "thread.h"
 
@@ -27,7 +28,10 @@ void * db_init(void * thr)
 {
   char l_query[150];
   char answer[150];
+
   int retval;
+  struct listnode * retvalnode;
+
   float random;
   int send;
   int delay;
@@ -46,7 +50,6 @@ void * db_init(void * thr)
   float p_delay = ((struct thr *)thr)->p_delay;
   float p_long_path = ((struct thr *)thr)->p_long_path;
 
-  int perform_oper = 0;
   char id_name[20];
   sprintf(id_name, "%d", ((struct thr *)thr)->thr_id);
   retval = sqlite3_open(id_name,&handle);
@@ -56,7 +59,8 @@ void * db_init(void * thr)
     pthread_exit(NULL);
   }
   printf("Connection successful\n");
- 
+  fflush(stdout);
+
   srand(time(NULL));
 
   while(1)
@@ -72,6 +76,8 @@ void * db_init(void * thr)
       listnode_delete(head);
 
       printf("%s: %s\n", id_name, l_query);
+      fflush(stdout);
+
       if(strncmp(l_query, "SELECT", 6) == 0)
       {
         retval = sqlite3_prepare_v2(handle,l_query,-1,&stmt,0);
@@ -100,6 +106,7 @@ void * db_init(void * thr)
               sprintf(loc_ans, "%s = %s",name,text);
               strncat(answer, loc_ans, strlen(loc_ans));
               printf("%s: answer: %s\n", id_name, answer);             
+              fflush(stdout);
 
               random = (rand() % 100) * 0.01;
               send = 1;
@@ -189,8 +196,11 @@ void * db_init(void * thr)
 //        printf("exiting from thread...\n");
 //        break;
       }
+
       retval = sqlite3_exec(handle,l_query,0,0,0);
-      perform_oper = 0;
+      retvalnode = listnode_new(Integer, retval);
+      LIST_APPEND(thr_output_queue, retvalnode);
+    
     }
   }
 
