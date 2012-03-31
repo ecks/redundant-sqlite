@@ -51,8 +51,10 @@ struct listnode
 
 struct list * list_new();
 struct listnode * listnode_new(const void * _class, ...);
+void listnode_extract(struct listnode * node, ...);
+bool listnode_compare_by(struct listnode * node_a, struct listnode * node_b, ...);
 struct listnode * listnode_dupl(struct listnode * clone);
-void extend(struct list * extend_to, struct list * extend_from);
+void list_extend(struct list * extend_to, struct list * extend_from);
 void listnode_delete(struct listnode * node);
 struct listnode * list_pop(struct list * list);
 void list_clear(struct list * list);

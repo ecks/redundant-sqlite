@@ -8,6 +8,7 @@
 #include "MsgStamp.h"
 #include "Class.h"
 #include "list.h"
+#include "stream.h"
 #include "thread.h"
 
 #include "red_db.h"
@@ -35,7 +36,7 @@ int minimum(int a, int b, int c)
   return min(temp, c);
 }
 
-int levenshtein(struct list * s, struct list * t)
+/*int levenshtein(struct list * s, struct list * t)
 {
   int s_size = s->size;
   int t_size = t->size;
@@ -81,26 +82,53 @@ int levenshtein(struct list * s, struct list * t)
 
   return d[s_size][t_size];
 }
+*/
 
+bool compare_by_buf_and_len(void * buf_a, int len_a, int tid_a, void * buf_b, int len_b, int tid_b)
+{
+  if(len_a != len_b)
+    return false;
 
-struct list * mark_from_list_by_str(char * str, struct list * list)
+  if(tid_a == tid_b)
+    return false;
+
+  if(memcmp(buf_a, buf_b, len_a) == 0)
+    return true;
+
+  return false;
+}
+
+bool compare_by_buf_and_len_only(void * buf_a, int len_a, int tid_a, void * buf_b, int len_b, int tid_b)
+{
+  if(len_a != len_b)
+    return false;
+
+  if(memcmp(buf_a, buf_b, len_a) == 0)
+    return true;
+
+  return false;
+}
+
+struct list * mark_from_list_by_str(struct listnode * mark_by_node, struct list * list)
 {
   struct list * removed = list_new();
   struct listnode * node = list->head;
   int tid_from_list; 
   while(node != NULL)
   {
-    char * str_from_list = ((struct MsgStamp *)node->data)->text;
-    int tid_from_list = ((struct MsgStamp *)node->data)->tid;
+    void * str_from_list;
+    int len;
+    int tid_from_list;
+    listnode_extract(node, &str_from_list, &len, &tid_from_list);
+//    void * str_from_list = ((struct MsgStamp *)node->data)->buf;
+//    int tid_from_list = ((struct MsgStamp *)node->data)->tid;
     struct listnode * next = node->next;
-    if(strcmp(str_from_list, str) == 0)
+    if(listnode_compare_by(node, mark_by_node, compare_by_buf_and_len_only) == true)
     {
-      struct listnode * node_to_add = calloc(1, sizeof(struct listnode));
-      node_to_add->data = calloc(1, sizeof(int));
-      memcpy(node_to_add->data, &tid_from_list, sizeof(int));
+      struct listnode * node_to_add = listnode_new(Integer, tid_from_list);
       LIST_APPEND(removed, node_to_add);
 
-      ((struct MsgStamp *)node->data)->text = "x";
+      ((struct MsgStamp *)node->data)->buf = NULL;
       
     }
     node = next;
@@ -108,19 +136,22 @@ struct list * mark_from_list_by_str(char * str, struct list * list)
   return removed;
 }
 
-struct list * remove_from_list_by_str(char * str, struct list * list)
+struct list * remove_from_list_by_node(struct listnode * remove_by_node, struct list * list)
 {
   struct list * removed = list_new();
   struct listnode * node = list->head;
   int tid_from_list; 
   while(node != NULL)
   {
-    char * str_from_list = ((struct MsgStamp *)node->data)->text;
-    int tid_from_list = ((struct MsgStamp *)node->data)->tid;
+    void * buf_from_list;
+    int len_from_list;
+    int tid_from_list;
+    listnode_extract(node, &buf_from_list, &len_from_list, &tid_from_list);
     struct listnode * prev = node->prev;
     struct listnode * next = node->next;
-    if(strcmp(str_from_list, str) == 0)
+    if(listnode_compare_by(node, remove_by_node, compare_by_buf_and_len_only) == true)
     {
+      printf("about to delete node(%d) val: %d response: %s\n", tid_from_list, *((int *)buf_from_list), (((char *)buf_from_list)+4));
       if(prev != NULL)
       {
         prev = next;
@@ -135,9 +166,7 @@ struct list * remove_from_list_by_str(char * str, struct list * list)
       }
       list->size--;
 
-      struct listnode * node_to_add = calloc(1, sizeof(struct listnode));
-      node_to_add->data = calloc(1, sizeof(int));
-      memcpy(node_to_add->data, &tid_from_list, sizeof(int));
+      struct listnode * node_to_add = listnode_new(Integer, tid_from_list);
       LIST_APPEND(removed, node_to_add);
 
       listnode_delete(node);
@@ -189,14 +218,13 @@ int data_in_output_queue(struct thr * thr_arr[])
   return 0;
 }
 
-int num_of_messages(char * str, int tid, struct list * list_to_check)
+int num_of_messages(struct listnode * compare_to_node, struct list * list_to_check)
 {
   struct listnode * node_to_check;
   int similarity = 0;
   LIST_FOREACH(list_to_check, node_to_check)
   {
-    if((strcmp(str, (char *)((struct MsgStamp *)node_to_check->data)->text) == 0) &&
-       (tid != (int)((struct MsgStamp *)node_to_check->data)->tid))
+    if(listnode_compare_by(node_to_check, compare_to_node, compare_by_buf_and_len) == true)
     {
       similarity++;
     } 
@@ -216,33 +244,40 @@ struct list * vote(struct list * foq, struct list * left_behind)
 
   if(foq->size > 0)
   {
-    extend(list_to_check, foq);
+    list_extend(list_to_check, foq);
   }
   if(left_behind->size > 0)
   {
-    extend(list_to_check, foq);
+    list_extend(list_to_check, foq);
   }
 
   LIST_FOREACH(list_to_check,node_to_check)
   {
-    char * str = ((struct MsgStamp *)node_to_check->data)->text;
-    int tid = ((struct MsgStamp *)node_to_check->data)->tid;
-    if(strcmp(str, "x") != 0)
+    void * buf;
+    int len;
+    int tid;
+    listnode_extract(node_to_check, &buf, &len, &tid);
+    if(buf != NULL)
     {
-      if(((float)num_of_messages(str, tid, list_to_check) / (float)NUM_THREADS) > 1.0/2.0)
+      if(((float)num_of_messages(node_to_check, list_to_check) / (float)NUM_THREADS) > 1.0/2.0)
       {
-        struct listnode * ans_node = listnode_new(String, str);
-        LIST_APPEND(ans, ans_node);
-        printf("ans is %s from %d\n", str, tid );
-        struct list * removed = remove_from_list_by_str(str, foq);
-        removed = mark_from_list_by_str(str, list_to_check);
+//        struct listnode * ans_node = listnode_new(String, str);
+//        LIST_APPEND(ans, ans_node);
+//        printf("ans is %s from %d\n", str, tid );
+        printf("ans node(%d) val: %d response: %s\n", tid, *((int *)buf), (((char *)buf)+4));
+
+        struct listnode * node_to_check_dup = listnode_dupl(node_to_check);
+        struct list * removed = remove_from_list_by_node(node_to_check_dup, foq);
+        removed = remove_from_list_by_node(node_to_check_dup, list_to_check);
         struct listnode * node;
         LIST_FOREACH(removed, node)
         {
-          int tid = *((int *)node->data);
-          printf("%d\n", tid);
-          remove_from_list_by_tid(tid, left_behind);
+          int tid_to_remove;
+          listnode_extract(node, &tid_to_remove);
+          printf("%d\n", tid_to_remove);
+          remove_from_list_by_tid(tid_to_remove, left_behind);
         }
+        listnode_delete(node_to_check_dup);
       }
     }
   }
@@ -251,7 +286,7 @@ struct list * vote(struct list * foq, struct list * left_behind)
 
   if(left_behind->size > 0)
   {
-    extend(foq, left_behind);
+    list_extend(foq, left_behind);
   }
   return foq;
 }
@@ -288,20 +323,26 @@ int init(struct thr * thr_arr[])
     thr_arr[i]->input_queue = list_new();
     thr_arr[i]->output_queue = list_new();
 
-    struct listnode * node = listnode_new(String, g_query);
-    LIST_APPEND(thr_arr[i]->input_queue, node);
+    thr_arr[i]->input_stream = stream_new(4096);
+    thr_arr[i]->output_stream = stream_new(4096);
+
+    stream_putl(thr_arr[i]->input_stream, strlen(g_query));
+    stream_put(thr_arr[i]->input_stream, g_query, strlen(g_query));
+
+//    struct listnode * node = listnode_new(String, g_query);
+//    LIST_APPEND(thr_arr[i]->input_queue, node);
 
     thr_arr[i]->p_loss = 0.0;
     thr_arr[i]->p_error = 0.0;
 
-    if(i == 2)
-    {
-      thr_arr[i]->p_delay = 1.0;
-    }
-    else
-    {
+//    if(i == 2)
+//    {
+//      thr_arr[i]->p_delay = 1.0;
+//    }
+//    else
+//    {
       thr_arr[i]->p_delay = 0.0;
-    }
+//    }
 
     thr_arr[i]->p_long_path = 0.0;
 
@@ -325,13 +366,15 @@ int init(struct thr * thr_arr[])
   {
     for(i = 0; i<NUM_THREADS; i++)
     {
-      if(thr_arr[i]->output_queue->size != 0)
+      if(STREAM_READABLE(thr_arr[i]->output_stream) != 0)
       {
         pthread_mutex_lock(&db_mutex);
-        struct listnode * head = list_pop(thr_arr[i]->output_queue);
+        int type = stream_getl(thr_arr[i]->output_stream);
+        int val = stream_getl(thr_arr[i]->output_stream);
+//        struct listnode * head = list_pop(thr_arr[i]->output_queue);
         pthread_mutex_unlock(&db_mutex);
 
-        retvalnode = listnode_new(Integer, ((struct Integer *)head->data)->val);
+        retvalnode = listnode_new(Integer, (struct Integer *)val);
         LIST_APPEND(retlist, retvalnode);
         nreadfrom++;
       }
@@ -342,14 +385,17 @@ int init(struct thr * thr_arr[])
   return retval;
 }
 
-void dispatch_to_threads(const char * command, struct thr * thr_arr[NUM_THREADS])
+void dispatch_to_threads(char * command, struct thr * thr_arr[NUM_THREADS])
 {
   int i;
+  int len = strlen(command);
   for(i = 0; i<NUM_THREADS; i++)
   {
-    struct listnode * node = listnode_new(String, command);
+//    struct listnode * node = listnode_new(String, command);
     pthread_mutex_lock(&db_mutex);
-    LIST_APPEND(thr_arr[i]->input_queue, node);
+    stream_putl(thr_arr[i]->input_stream, strlen(command));
+    stream_put(thr_arr[i]->input_stream, command, strlen(command));
+//    LIST_APPEND(thr_arr[i]->input_queue, node);
     pthread_mutex_unlock(&db_mutex);
   }
 }
@@ -369,7 +415,7 @@ void trim_header(char * buffer)
 {
   int len = strlen(buffer);
   int i;
-  for(i = 0; i < len; i++)
+  for(i = 0; (i+3) < len; i++)
   {
     buffer[i] = buffer[i+3];
   }
@@ -381,11 +427,17 @@ int main(int argc, char *argv[])
   int rc;
   int retval;
   int i;
+  int type = -1;
+  int val;
   struct thr * thr_arr[NUM_THREADS];
   struct list * foq;
   char g_query[150];
   char dispatch_msg[150];
+  char response[150];
   void *status;
+  void * msg_buffer;
+  void * b_ptr;
+  int total_len;
 
   pthread_mutex_init(&db_mutex, NULL);
 
@@ -395,68 +447,110 @@ int main(int argc, char *argv[])
     exit(1);
   }
   printf("Ret on init: %d\n", retval);
-//  fflush(stdout);
  
-  ans = list_new();
+//  ans = list_new();
   real_ans = list_new();
 
-  get_input(dispatch_msg);
-  while(strcmp(dispatch_msg, "SELECT * from users") != 0)
+  struct list * left_behind = list_new();
+  foq = list_new();
+
+  // initialize message buffer
+  msg_buffer = calloc(150, sizeof(void));
+
+  while(1)
   {
-    if(strncmp(dispatch_msg, "i: ", 3) ==0)
-    {
-      init(thr_arr);
-    }
+    // wait for input
+    get_input(dispatch_msg);
+
+    // if command, then dispatch to threads
     if(strncmp(dispatch_msg, "c: ", 3) == 0)
     {
       trim_header(dispatch_msg);
       dispatch_to_threads(dispatch_msg, thr_arr);
     }
+
+    // if answer, then record it in answer list
     if(strncmp(dispatch_msg, "a: ", 3) == 0)
     {
       trim_header(dispatch_msg);
       struct listnode * real_ans_node = listnode_new(String,dispatch_msg);
       LIST_APPEND(real_ans, real_ans_node);
     }
-    get_input(dispatch_msg);
-  }
 
-  dispatch_to_threads(dispatch_msg, thr_arr);
+    if(strcmp(dispatch_msg, "SELECT * from users") == 0)
+    {
+      dispatch_to_threads(dispatch_msg, thr_arr);
+    }
 
-  struct list * left_behind = list_new();
-  foq = list_new();
+    sleep(1);  // wait a little bit for other threads to produce result
 
-  while(1)
-  {
     list_clear(foq);
     for(i = 0; i<NUM_THREADS; i++)
     {
-      if(thr_arr[i]->output_queue->size != 0)
+      total_len = 0;
+      if(STREAM_READABLE(thr_arr[i]->output_stream) != 0)
       {
         pthread_mutex_lock(&db_mutex);
-        struct listnode * head = list_pop(thr_arr[i]->output_queue);
+        type = stream_getl(thr_arr[i]->output_stream);
         pthread_mutex_unlock(&db_mutex);
+        if(type == RET_VAL)
+        {
+          pthread_mutex_lock(&db_mutex);
+          val = stream_getl(thr_arr[i]->output_stream);
+          pthread_mutex_unlock(&db_mutex);
+          int len = 4; 
+          memcpy(msg_buffer, (void *)&val, len);
+          total_len += len;
+          
+        }
+        else if(type == RET_VAL_LIST)
+        {
+          pthread_mutex_lock(&db_mutex);
+          val = stream_getl(thr_arr[i]->output_stream);
+          pthread_mutex_unlock(&db_mutex);
+          int len = 4;
+   
+          b_ptr = msg_buffer;
+          memcpy(msg_buffer, (void *)&val, len);
+          b_ptr += len;
+          total_len += len;
 
-        struct listnode * answer = listnode_new(MsgStamp, ((struct String *)head->data)->text, i);
+          pthread_mutex_lock(&db_mutex);
+          len = stream_getl(thr_arr[i]->output_stream);
+          stream_get(response, thr_arr[i]->output_stream, len);
+          pthread_mutex_unlock(&db_mutex);
+          memcpy(b_ptr, (void *)response, len);
+          total_len += len;     
 
-        LIST_APPEND(foq, answer);
-        printf("%d: extracting %s to %s with size %d\n", i, (char *)((struct String *)head->data)->text, (char *)((struct MsgStamp *)answer->data)->text, foq->size);
+          printf("ret_val_list(%d) val: %d response: %s\n", i, val, response);
+        }
+
+        struct listnode * answer_node;
+        answer_node = listnode_new(MsgStamp, (void *)msg_buffer, total_len, i);
+
+        LIST_APPEND(foq, answer_node);
+//        printf("%d: extracting %s to %s with size %d\n", i, (char *)((struct String *)head->data)->text, (char *)((struct MsgStamp *)answer->data)->text, foq->size);
       }
     }
-    struct listnode * node_to_check;
-    LIST_FOREACH(foq, node_to_check)
+    if(type == RET_VAL)
     {
-      printf("outside vote: %s\n", (char *)((struct MsgStamp *)node_to_check->data)->text);
+      retval = vote_on_retval(foq);
+      printf("Ret on command: %d\n", retval);
     }
-    vote(foq, left_behind);
-//    struct listnode * ans_node;
-//    LIST_FOREACH(ans, ans_node)
-//    {
-//      printf("ans: %s\n", (char *)((struct MsgStamp *)ans_node->data)->text);
-//    }
-    sleep(1);
-    printf("levenshtein: %d\n", levenshtein(ans, real_ans));
-
+    else if(type == RET_VAL_LIST)
+    {
+      struct listnode * node_to_check;
+      LIST_FOREACH(foq, node_to_check)
+      {
+        void * buf;
+        int len;
+        int tid;
+        listnode_extract(node_to_check, &buf, &len, &tid);
+        printf("outside vote(%d) val: %d response: %s\n", tid, *((int *)buf), (((char *)buf)+4));
+      }
+      vote(foq, left_behind);
+//      printf("levenshtein: %d\n", levenshtein(ans, real_ans));
+    }
 //    strncpy(g_query,"SELECT * from users", 150);
 //    dispatch_to_threads(g_query, thr_arr);
   } 

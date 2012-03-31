@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <assert.h>
 #include "Class.h"
@@ -27,6 +28,26 @@ void * vnew(const void * _class, va_list * app)
   }
 
   return p;
+}
+
+void extract(void * self, va_list * app)
+{
+  const struct Class ** cp = self;
+
+  if(self && *cp && (*cp)->xtor)
+  {
+    (*cp)->xtor(self, app);
+  }
+}
+
+bool compare_by(void * self, void * b, va_list * app)
+{
+  const struct Class ** cp = self;
+
+  if(self && *cp && (*cp)->cmp)
+  {
+    (*cp)->cmp(self, b, app);
+  }
 }
 
 void * dupl(void * self)

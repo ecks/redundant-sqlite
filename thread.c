@@ -8,6 +8,7 @@
 #include "String.h"
 #include "Integer.h"
 #include "list.h"
+#include "stream.h"
 #include "thread.h"
 
 void gen_random(char * s, const int len)
@@ -42,6 +43,10 @@ void * db_init(void * thr)
   answer[0] = '\0';
   struct list * thr_input_queue = ((struct thr *)thr)->input_queue;
   struct list * thr_output_queue = ((struct thr *)thr)->output_queue;
+
+  struct stream * thr_input_stream = ((struct thr *)thr)->input_stream;
+  struct stream * thr_output_stream = ((struct thr *)thr)->output_stream;
+
   struct list * delay_queue = list_new();
   struct listnode * delay_node;
 
@@ -65,15 +70,19 @@ void * db_init(void * thr)
 
   while(1)
   { 
-    if(thr_input_queue->size != 0)
+    if(STREAM_READABLE(thr_input_stream) != 0)
     {
       pthread_mutex_lock(&db_mutex);
-      struct listnode * head = list_pop(thr_input_queue);
+      int size = stream_getl(thr_input_stream);
+      stream_get(l_query, thr_input_stream, size);
+      stream_reset(thr_input_stream);
       pthread_mutex_unlock(&db_mutex);
 
-      struct String * str = (struct String *)head->data;
-      memcpy(l_query, str->text, sizeof(char) * 150);
-      listnode_delete(head);
+      l_query[size] = '\0';  // null terminate our characters
+
+//      struct String * str = (struct String *)head->data;
+//      memcpy(l_query, str->text, sizeof(char) * 150);
+//      listnode_delete(head);
 
       printf("%s: %s\n", id_name, l_query);
       fflush(stdout);
@@ -161,11 +170,15 @@ void * db_init(void * thr)
 
                   LIST_APPEND(delay_queue, node);
                 }
-                else // we can just send wormally
+                else // we can just send normally
                 {
+                  int len = strlen(answer);
                   pthread_mutex_lock(&db_mutex);
-                  LIST_APPEND(thr_output_queue, node);
-                  printf("%s: sending node: %s\n", id_name, ((struct String *)node->data)->text);
+//                  LIST_APPEND(thr_output_queue, node);
+                  stream_putl(thr_output_stream, RET_VAL_LIST);
+		  stream_putl(thr_output_stream, retval);
+                  stream_putl(thr_output_stream, len);
+                  stream_put(thr_output_stream, answer, strlen(answer));
                   pthread_mutex_unlock(&db_mutex);
 
 //                 sleep(1);
@@ -198,8 +211,12 @@ void * db_init(void * thr)
       }
 
       retval = sqlite3_exec(handle,l_query,0,0,0);
-      retvalnode = listnode_new(Integer, retval);
-      LIST_APPEND(thr_output_queue, retvalnode);
+      pthread_mutex_lock(&db_mutex);
+      stream_putl(thr_output_stream, RET_VAL);
+      stream_putl(thr_output_stream, retval);
+      pthread_mutex_unlock(&db_mutex);
+//      retvalnode = listnode_new(Integer, retval);
+//      LIST_APPEND(thr_output_queue, retvalnode);
     
     }
   }

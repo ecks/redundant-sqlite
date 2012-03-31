@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <assert.h>
+#include <stdbool.h>
 #include "Class.h"
 #include "list.h"
 
@@ -23,6 +24,24 @@ struct listnode * listnode_new(const void * _class, ...)
   return node;
 }
 
+void listnode_extract(struct listnode * node, ...)
+{
+  va_list ap;
+ 
+  va_start(ap, node);
+  extract(node->data, &ap);
+  va_end(ap);
+}
+
+bool listnode_compare_by(struct listnode * node_a, struct listnode * node_b, ...)
+{
+  va_list ap;
+
+  va_start(ap, node_b);
+  compare_by(node_a->data, node_b->data, &ap);
+  va_end(ap);
+}
+
 struct listnode * listnode_dupl(struct listnode * clone)
 {
   struct listnode * node = calloc(1, sizeof(struct listnode));
@@ -30,7 +49,7 @@ struct listnode * listnode_dupl(struct listnode * clone)
   return node;
 }
 
-void extend(struct list * extend_to, struct list * extend_from)
+void list_extend(struct list * extend_to, struct list * extend_from)
 {
   struct listnode * node_extend_from;
   LIST_FOREACH(extend_from, node_extend_from)
