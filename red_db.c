@@ -293,14 +293,22 @@ struct list * vote(struct list * foq, struct list * left_behind)
 
 int vote_on_retval(struct list * retlist)
 {
+  int retval;
+
   struct listnode * retvalnode = list_pop(retlist); 
-  int retval  = ((struct Integer *)retvalnode->data)->val;
-  int retval_tmp;
-  LIST_FOREACH(retlist, retvalnode)
+  listnode_extract(retvalnode, &retval);
+
+  struct listnode * retvalnode_tmp;
+
+//  ((struct Integer *)retvalnode->data)->val;
+  LIST_FOREACH(retlist, retvalnode_tmp)
   {
-    retval_tmp = ((struct Integer *)retvalnode->data)->val;
+    int retval_tmp;
+    listnode_extract(retvalnode_tmp, &retval_tmp);
     if(retval_tmp == retval)
+    {
       retval = retval_tmp;
+    }
     else
       return -1;
   }
@@ -374,7 +382,7 @@ int init(struct thr * thr_arr[])
 //        struct listnode * head = list_pop(thr_arr[i]->output_queue);
         pthread_mutex_unlock(&db_mutex);
 
-        retvalnode = listnode_new(Integer, (struct Integer *)val);
+        retvalnode = listnode_new(Integer, val);
         LIST_APPEND(retlist, retvalnode);
         nreadfrom++;
       }
@@ -438,6 +446,8 @@ int main(int argc, char *argv[])
   void * msg_buffer;
   void * b_ptr;
   int total_len;
+  
+  struct listnode * answer_node; // getting answer from stream
 
   pthread_mutex_init(&db_mutex, NULL);
 
@@ -497,11 +507,15 @@ int main(int argc, char *argv[])
         {
           pthread_mutex_lock(&db_mutex);
           val = stream_getl(thr_arr[i]->output_stream);
+          stream_reset(thr_arr[i]->output_stream);
           pthread_mutex_unlock(&db_mutex);
           int len = 4; 
           memcpy(msg_buffer, (void *)&val, len);
           total_len += len;
           
+          printf("ret_val(%d) val: %d\n", i, val);
+         
+          answer_node = listnode_new(Integer, val);
         }
         else if(type == RET_VAL_LIST)
         {
@@ -518,15 +532,15 @@ int main(int argc, char *argv[])
           pthread_mutex_lock(&db_mutex);
           len = stream_getl(thr_arr[i]->output_stream);
           stream_get(response, thr_arr[i]->output_stream, len);
+          stream_reset(thr_arr[i]->output_stream);
           pthread_mutex_unlock(&db_mutex);
           memcpy(b_ptr, (void *)response, len);
           total_len += len;     
 
           printf("ret_val_list(%d) val: %d response: %s\n", i, val, response);
-        }
 
-        struct listnode * answer_node;
-        answer_node = listnode_new(MsgStamp, (void *)msg_buffer, total_len, i);
+          answer_node = listnode_new(MsgStamp, (void *)msg_buffer, total_len, i);
+        }
 
         LIST_APPEND(foq, answer_node);
 //        printf("%d: extracting %s to %s with size %d\n", i, (char *)((struct String *)head->data)->text, (char *)((struct MsgStamp *)answer->data)->text, foq->size);
