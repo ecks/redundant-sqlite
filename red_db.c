@@ -3,12 +3,14 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include "String.h"
-#include "Integer.h"
-#include "MsgStamp.h"
-#include "Class.h"
-#include "list.h"
-#include "stream.h"
+#include <poll.h>
+#include <regex.h>
+#include "lib/String.h"
+#include "lib/Integer.h"
+#include "lib/MsgStamp.h"
+#include "lib/Class.h"
+#include "lib/list.h"
+#include "lib/stream.h"
 #include "thread.h"
 
 #include "red_db.h"
@@ -224,7 +226,7 @@ int num_of_messages(struct listnode * compare_to_node, struct list * list_to_che
   int similarity = 0;
   LIST_FOREACH(list_to_check, node_to_check)
   {
-    if(listnode_compare_by(node_to_check, compare_to_node, compare_by_buf_and_len) == true)
+    if(listnode_compare_by(node_to_check, compare_to_node, compare_by_buf_and_len_only) == true)
     {
       similarity++;
     } 
@@ -341,16 +343,24 @@ int init(struct thr * thr_arr[])
 //    LIST_APPEND(thr_arr[i]->input_queue, node);
 
     thr_arr[i]->p_loss = 0.0;
-    thr_arr[i]->p_error = 0.0;
 
-//    if(i == 2)
-//    {
-//      thr_arr[i]->p_delay = 1.0;
-//    }
-//    else
-//    {
+    if(i == 2)
+    {
+      thr_arr[i]->p_error = 1.0;
+    }
+    else
+    {
+      thr_arr[i]->p_error = 0.0;
+    }
+
+    if(i == 2)
+    {
+      thr_arr[i]->p_delay = 1.0;
+    }
+    else
+    {
       thr_arr[i]->p_delay = 0.0;
-//    }
+    }
 
     thr_arr[i]->p_long_path = 0.0;
 
@@ -364,14 +374,15 @@ int init(struct thr * thr_arr[])
 
   }
 
-  // wait for retval
+  // wait for retval (if it is there
   struct listnode * head;
   struct listnode * retvalnode;
   struct list * retlist = list_new();
   int retval;
   int nreadfrom = 0;
-  while(nreadfrom < NUM_THREADS)
-  {
+  sleep(1);
+//  while(nreadfrom < NUM_THREADS)
+//  {
     for(i = 0; i<NUM_THREADS; i++)
     {
       if(STREAM_READABLE(thr_arr[i]->output_stream) != 0)
@@ -387,10 +398,17 @@ int init(struct thr * thr_arr[])
         nreadfrom++;
       }
     }
-  }
+//  }
 
-  retval = vote_on_retval(retlist);
-  return retval;
+  if(retlist->size != 0)
+  {
+    retval = vote_on_retval(retlist);
+    return retval;
+  }
+  else
+  {
+    return -1;
+  }
 }
 
 void dispatch_to_threads(char * command, struct thr * thr_arr[NUM_THREADS])
@@ -430,6 +448,101 @@ void trim_header(char * buffer)
   buffer[i] = buffer[len]; // insetrt null terminating character
 }
 
+void poll_dispatch_input(char * dispatch_msg, struct thr * thr_arr[NUM_THREADS])
+{
+  struct pollfd fd;
+  fd.fd = STDIN_FILENO;
+  fd.events = POLLIN;
+  fd.revents = 0;
+  int ret = poll(&fd, 1, 0); // 1 fd, return right away (third argument is 0)
+  if(ret > 0 && (fd.revents & POLLIN != 0))
+  {
+    get_input(dispatch_msg);
+
+    // if command, then dispatch to threads
+    if(strncmp(dispatch_msg, "c: ", 3) == 0)
+    {
+      trim_header(dispatch_msg);
+      dispatch_to_threads(dispatch_msg, thr_arr);
+    }
+
+    // if request to change probability of loss change it and send update
+    if(strncmp(dispatch_msg, "p: l", 4) == 0)
+    {
+      regex_t re;
+      int num_matches = 1;
+      regmatch_t matches[num_matches]; // one match for whole digit
+      char dst[10];
+      float dst_f;
+      char * msg_p = dispatch_msg;
+      const char * pattern = "([[:digit:]]+)[.]([[:digit:]]+)";
+      int nomatch = 0;
+      if(regcomp(&re, pattern, REG_EXTENDED) != 0)
+      {
+        printf("Error on a regex compilation\n");   
+      }
+      int i = 0;
+      while(!nomatch)
+      {
+        nomatch = regexec(&re, msg_p, num_matches, matches, 0);
+        if (nomatch)
+        {
+          printf("No more matches\n");
+          regfree(&re);
+        }
+        else
+        {
+          printf("Start of offset: %d and end of offset: %d\n", matches[0].rm_so, matches[0].rm_eo);
+          strncpy(dst, msg_p + matches[0].rm_so, matches[0].rm_eo - matches[0].rm_so);
+          dst[matches[0].rm_eo - matches[0].rm_so] = '\0';
+          dst_f = strtof(dst, NULL);
+          printf("%f\n", dst_f);
+          printf("Setting thr_arr[%d]->p_loss\n", i);
+          pthread_mutex_lock(&db_mutex);
+          thr_arr[i]->p_loss = dst_f;      
+          pthread_mutex_unlock(&db_mutex);
+          msg_p += matches[0].rm_eo;
+        }
+        i++;
+      }
+    }
+
+    // if request to change probability of delay change it and send update
+    if(strncmp(dispatch_msg, "p: d", 4) == 0)
+    {
+      for(int i = 0; i < NUM_THREADS; i++)
+      { 
+        printf("Setting thr_arr[%d]->p_delay\n", i);
+        pthread_mutex_lock(&db_mutex);
+        thr_arr[i]->p_delay = 0.0;      
+        pthread_mutex_unlock(&db_mutex);
+      }
+    }
+     // if answer, then record it in answer list
+//    if(strncmp(dispatch_msg, "a: ", 3) == 0)
+//    {
+//      trim_header(dispatch_msg);
+//      struct listnode * real_ans_node = listnode_new(String,dispatch_msg);
+//      LIST_APPEND(real_ans, real_ans_node);
+//    }
+
+    if(strcmp(dispatch_msg, "SELECT * from users") == 0)
+    {
+      dispatch_to_threads(dispatch_msg, thr_arr);
+    }
+
+    if(strcmp(dispatch_msg, "quit") == 0)
+    {
+      exit(0);
+    }
+  }
+  else
+  { 
+    // no data can be read at this time
+  }
+}
+
+
 int main(int argc, char *argv[])
 {
   int rc;
@@ -454,7 +567,6 @@ int main(int argc, char *argv[])
   if((retval = init(thr_arr)) < 0)
   {
     printf("Error on initialization\n");
-    exit(1);
   }
   printf("Ret on init: %d\n", retval);
  
@@ -469,28 +581,11 @@ int main(int argc, char *argv[])
 
   while(1)
   {
-    // wait for input
-    get_input(dispatch_msg);
+    // reset values here for next round
+    type = -1;
 
-    // if command, then dispatch to threads
-    if(strncmp(dispatch_msg, "c: ", 3) == 0)
-    {
-      trim_header(dispatch_msg);
-      dispatch_to_threads(dispatch_msg, thr_arr);
-    }
-
-    // if answer, then record it in answer list
-    if(strncmp(dispatch_msg, "a: ", 3) == 0)
-    {
-      trim_header(dispatch_msg);
-      struct listnode * real_ans_node = listnode_new(String,dispatch_msg);
-      LIST_APPEND(real_ans, real_ans_node);
-    }
-
-    if(strcmp(dispatch_msg, "SELECT * from users") == 0)
-    {
-      dispatch_to_threads(dispatch_msg, thr_arr);
-    }
+    // poll for input
+    poll_dispatch_input(dispatch_msg, thr_arr);
 
     sleep(1);  // wait a little bit for other threads to produce result
 
